@@ -30,13 +30,13 @@ class RunContext(Generic[AgentDepsT]):
     """LLM usage associated with the run."""
     prompt: str | Sequence[_messages.UserContent] | None = None
     """The original user prompt passed to the run."""
-    messages: list[_messages.ModelMessage] = field(default_factory=list)
+    messages: list[_messages.ModelMessage] = field(default_factory=list[_messages.ModelMessage])
     """Messages exchanged in the conversation so far."""
     tracer: Tracer = field(default_factory=NoOpTracer)
     """The tracer to use for tracing the run."""
     trace_include_content: bool = False
     """Whether to include the content of the messages in the trace."""
-    retries: dict[str, int] = field(default_factory=dict)
+    retries: dict[str, int] = field(default_factory=dict[str, int])
     """Number of retries for each tool so far."""
     tool_call_id: str | None = None
     """The ID of the tool call."""
