@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import cast
 
 import datasets
 import duckdb
@@ -47,7 +48,7 @@ def load_dataset(
     """
     # begin load data from hf
     builder = datasets.load_dataset_builder(path)  # pyright: ignore[reportUnknownMemberType]
-    splits: dict[str, datasets.SplitInfo] = builder.info.splits or {}  # pyright: ignore[reportUnknownMemberType]
+    splits = cast(dict[str, datasets.SplitInfo], builder.info.splits or {})  # pyright: ignore[reportUnknownMemberType]
     if split not in splits:
         raise ModelRetry(
             f'{split} is not valid for dataset {path}. Valid splits are {",".join(splits.keys())}'

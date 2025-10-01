@@ -691,8 +691,8 @@ class Dataset(BaseModel, Generic[InputsT, OutputT, MetadataT], extra='forbid', a
         class Case(BaseModel, extra='forbid'):  # pyright: ignore[reportUnusedClass]  # this _is_ used below, but pyright doesn't seem to notice..
             name: str | None = None
             inputs: in_type  # pyright: ignore[reportInvalidTypeForm]
-            metadata: meta_type | None = None  # pyright: ignore[reportInvalidTypeForm,reportUnknownVariableType]
-            expected_output: out_type | None = None  # pyright: ignore[reportInvalidTypeForm,reportUnknownVariableType]
+            metadata: meta_type | None = None  # pyright: ignore[reportInvalidTypeForm]
+            expected_output: out_type | None = None  # pyright: ignore[reportInvalidTypeForm]
             if evaluator_schema_types:  # pragma: no branch
                 evaluators: list[Union[tuple(evaluator_schema_types)]] = []  # pyright: ignore  # noqa UP007
 

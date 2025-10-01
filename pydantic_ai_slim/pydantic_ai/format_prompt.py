@@ -85,7 +85,7 @@ class _ToXml:
         default_factory=dict[str, tuple[str, FieldInfo | ComputedFieldInfo]]
     )
     # keep track of fields we have extracted attributes from
-    _included_fields: set[str] = field(default_factory=set)
+    _included_fields: set[str] = field(default_factory=set[str])
     # keep track of class names for dataclasses and Pydantic models, that occur in lists
     _element_names: dict[str, str] = field(default_factory=dict[str, str])
     # flag for parsing dataclasses and Pydantic models once
