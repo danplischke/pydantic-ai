@@ -15,7 +15,6 @@ from pydantic.json_schema import GenerateJsonSchema
 from typing_extensions import Self, TypeVar, deprecated
 
 from pydantic_ai.agent.abstract import AbstractAgent
-from pydantic_ai.toolsets.agent import AgentToolset
 
 from pydantic_ai._instrumentation import DEFAULT_INSTRUMENTATION_VERSION, InstrumentationNames
 
@@ -64,14 +63,14 @@ from ..toolsets._dynamic import (
     DynamicToolset,
     ToolsetFunc,
 )
-from ..toolsets.agent import (
-    AgentToolset,
-    AgentToolsetTool,
+from ..toolsets.handoff import (
+    HandoffToolset,
     HandoffDepsFunc,
     HandoffDepsT,
     HandoffInputModelT,
     HandoffOutputDataT,
     HandoffUserPromptFunc,
+    Handoff,
 )
 from ..toolsets.combined import CombinedToolset
 from ..toolsets.function import FunctionToolset
@@ -156,7 +155,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
     _function_toolset: FunctionToolset[AgentDepsT] = dataclasses.field(repr=False)
     _output_toolset: OutputToolset[AgentDepsT] | None = dataclasses.field(repr=False)
     _user_toolsets: list[AbstractToolset[AgentDepsT]] = dataclasses.field(repr=False)
-    _handoff_toolset: AgentToolset[AgentDepsT] = dataclasses.field(repr=False)
+    _handoff_toolset: HandoffToolset[AgentDepsT] = dataclasses.field(repr=False)
     _prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = dataclasses.field(repr=False)
     _prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = dataclasses.field(repr=False)
     _max_result_retries: int = dataclasses.field(repr=False)
@@ -170,78 +169,83 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
 
     @overload
     def __init__(
-        self,
-        model: models.Model | models.KnownModelName | str | None = None,
-        *,
-        output_type: OutputSpec[OutputDataT] = str,
-        instructions: Instructions[AgentDepsT] = None,
-        system_prompt: str | Sequence[str] = (),
-        deps_type: type[AgentDepsT] = NoneType,
-        name: str | None = None,
-        model_settings: ModelSettings | None = None,
-        retries: int = 1,
-        output_retries: int | None = None,
-        tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
-        builtin_tools: Sequence[AbstractBuiltinTool] = (),
-        prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
-        prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
-        toolsets: Sequence[AbstractToolset[AgentDepsT] | ToolsetFunc[AgentDepsT]] | None = None,
-        defer_model_check: bool = False,
-        end_strategy: EndStrategy = 'early',
-        instrument: InstrumentationSettings | bool | None = None,
-        history_processors: Sequence[HistoryProcessor[AgentDepsT]] | None = None,
-        event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
-    ) -> None: ...
+            self,
+            model: models.Model | models.KnownModelName | str | None = None,
+            *,
+            output_type: OutputSpec[OutputDataT] = str,
+            instructions: Instructions[AgentDepsT] = None,
+            system_prompt: str | Sequence[str] = (),
+            deps_type: type[AgentDepsT] = NoneType,
+            name: str | None = None,
+            model_settings: ModelSettings | None = None,
+            retries: int = 1,
+            output_retries: int | None = None,
+            tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+            handoffs: Sequence[Handoff[AgentDepsT] | Agent[AgentDepsT]] | None = None,
+            builtin_tools: Sequence[AbstractBuiltinTool] = (),
+            prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
+            prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
+            toolsets: Sequence[AbstractToolset[AgentDepsT] | ToolsetFunc[AgentDepsT]] | None = None,
+            defer_model_check: bool = False,
+            end_strategy: EndStrategy = 'early',
+            instrument: InstrumentationSettings | bool | None = None,
+            history_processors: Sequence[HistoryProcessor[AgentDepsT]] | None = None,
+            event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
+    ) -> None:
+        ...
 
     @overload
     @deprecated('`mcp_servers` is deprecated, use `toolsets` instead.')
     def __init__(
-        self,
-        model: models.Model | models.KnownModelName | str | None = None,
-        *,
-        output_type: OutputSpec[OutputDataT] = str,
-        instructions: Instructions[AgentDepsT] = None,
-        system_prompt: str | Sequence[str] = (),
-        deps_type: type[AgentDepsT] = NoneType,
-        name: str | None = None,
-        model_settings: ModelSettings | None = None,
-        retries: int = 1,
-        output_retries: int | None = None,
-        tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
-        builtin_tools: Sequence[AbstractBuiltinTool] = (),
-        prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
-        prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
-        mcp_servers: Sequence[MCPServer] = (),
-        defer_model_check: bool = False,
-        end_strategy: EndStrategy = 'early',
-        instrument: InstrumentationSettings | bool | None = None,
-        history_processors: Sequence[HistoryProcessor[AgentDepsT]] | None = None,
-        event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
-    ) -> None: ...
+            self,
+            model: models.Model | models.KnownModelName | str | None = None,
+            *,
+            output_type: OutputSpec[OutputDataT] = str,
+            instructions: Instructions[AgentDepsT] = None,
+            system_prompt: str | Sequence[str] = (),
+            deps_type: type[AgentDepsT] = NoneType,
+            name: str | None = None,
+            model_settings: ModelSettings | None = None,
+            retries: int = 1,
+            output_retries: int | None = None,
+            tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+            handoffs: Sequence[Handoff[AgentDepsT] | Agent[AgentDepsT]] | None = None,
+            builtin_tools: Sequence[AbstractBuiltinTool] = (),
+            prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
+            prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
+            mcp_servers: Sequence[MCPServer] = (),
+            defer_model_check: bool = False,
+            end_strategy: EndStrategy = 'early',
+            instrument: InstrumentationSettings | bool | None = None,
+            history_processors: Sequence[HistoryProcessor[AgentDepsT]] | None = None,
+            event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
+    ) -> None:
+        ...
 
     def __init__(
-        self,
-        model: models.Model | models.KnownModelName | str | None = None,
-        *,
-        output_type: OutputSpec[OutputDataT] = str,
-        instructions: Instructions[AgentDepsT] = None,
-        system_prompt: str | Sequence[str] = (),
-        deps_type: type[AgentDepsT] = NoneType,
-        name: str | None = None,
-        model_settings: ModelSettings | None = None,
-        retries: int = 1,
-        output_retries: int | None = None,
-        tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
-        builtin_tools: Sequence[AbstractBuiltinTool] = (),
-        prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
-        prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
-        toolsets: Sequence[AbstractToolset[AgentDepsT] | ToolsetFunc[AgentDepsT]] | None = None,
-        defer_model_check: bool = False,
-        end_strategy: EndStrategy = 'early',
-        instrument: InstrumentationSettings | bool | None = None,
-        history_processors: Sequence[HistoryProcessor[AgentDepsT]] | None = None,
-        event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
-        **_deprecated_kwargs: Any,
+            self,
+            model: models.Model | models.KnownModelName | str | None = None,
+            *,
+            output_type: OutputSpec[OutputDataT] = str,
+            instructions: Instructions[AgentDepsT] = None,
+            system_prompt: str | Sequence[str] = (),
+            deps_type: type[AgentDepsT] = NoneType,
+            name: str | None = None,
+            model_settings: ModelSettings | None = None,
+            retries: int = 1,
+            output_retries: int | None = None,
+            tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+            handoffs: Sequence[Handoff[AgentDepsT] | Agent[AgentDepsT]] | None = None,
+            builtin_tools: Sequence[AbstractBuiltinTool] = (),
+            prepare_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
+            prepare_output_tools: ToolsPrepareFunc[AgentDepsT] | None = None,
+            toolsets: Sequence[AbstractToolset[AgentDepsT] | ToolsetFunc[AgentDepsT]] | None = None,
+            defer_model_check: bool = False,
+            end_strategy: EndStrategy = 'early',
+            instrument: InstrumentationSettings | bool | None = None,
+            history_processors: Sequence[HistoryProcessor[AgentDepsT]] | None = None,
+            event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
+            **_deprecated_kwargs: Any,
     ):
         """Create an agent.
 
@@ -344,7 +348,13 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         self._function_toolset = _AgentFunctionToolset(
             tools, max_retries=self._max_tool_retries, output_schema=self._output_schema
         )
-        self._handoff_toolset = AgentToolset[AgentDepsT]()
+        self._handoff_toolset = HandoffToolset[AgentDepsT](
+            max_retries=self._max_tool_retries
+        )
+
+        for handoff in handoffs or []:
+            handoff = handoff if isinstance(handoff, Handoff) else Handoff.from_agent(handoff)
+            self._handoff_toolset.add_agent_tool(handoff.as_handoff_toolset_tool(self._handoff_toolset))
 
         self._dynamic_toolsets = [
             DynamicToolset[AgentDepsT](toolset_func=toolset)

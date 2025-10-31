@@ -23,11 +23,11 @@ from ..tools import (
 )
 from .abstract import AbstractToolset, ToolsetTool
 
-CallerDepsT = TypeVar('CallerDepsT', default=None)
+CallerDepsT = TypeVar('CallerDepsT')
 
-HandoffDepsT = TypeVar('HandoffDepsT', default=None)
-HandoffInputModelT = TypeVar('HandoffInputModelT', default=None)
-HandoffOutputDataT = TypeVar('HandoffOutputDataT', default=None)
+HandoffDepsT = TypeVar('HandoffDepsT')
+HandoffInputModelT = TypeVar('HandoffInputModelT')
+HandoffOutputDataT = TypeVar('HandoffOutputDataT')
 
 HandoffDepsFunc = Callable[[CallerDepsT, HandoffInputModelT], Awaitable[HandoffDepsT]]
 """A function that takes an input model and dependencies and returns the agent dependencies."""
@@ -50,7 +50,7 @@ HandoffRunFunc = Callable[
 
 
 @dataclass
-class AgentToolsetTool(
+class HandoffToolsetTool(
     ToolsetTool[CallerDepsT], Generic[CallerDepsT, HandoffInputModelT, HandoffDepsT, HandoffOutputDataT]
 ):
     """A tool definition for an Agent Tool."""
@@ -105,8 +105,8 @@ class AgentToolsetTool(
 
         return agent_run_result.output
 
-    def as_toolset_tool(self) -> ToolsetTool[AgentDepsT]:
-        return ToolsetTool[AgentDepsT](
+    def as_toolset_tool(self) -> ToolsetTool[CallerDepsT]:
+        return ToolsetTool[CallerDepsT](
             toolset=self.toolset,
             tool_def=self.tool_def,
             max_retries=self.max_retries,
@@ -114,7 +114,67 @@ class AgentToolsetTool(
         )
 
 
-class AgentToolset(AbstractToolset[AgentDepsT]):
+@dataclass
+class Handoff(Generic[CallerDepsT, HandoffInputModelT, HandoffDepsT, HandoffOutputDataT]):
+    agent: AbstractAgent[CallerDepsT, HandoffOutputDataT]
+    input_type: type[HandoffInputModelT] = str
+    name: str | None = None
+    description: str | None = None
+    deps_func: HandoffDepsFunc[CallerDepsT, HandoffInputModelT, HandoffDepsT] | None = None
+    user_prompt_func: HandoffUserPromptFunc[CallerDepsT, HandoffInputModelT] | None = None
+    run_func: HandoffRunFunc[CallerDepsT, HandoffDepsT, HandoffOutputDataT] | None = None
+
+    @classmethod
+    def from_agent(
+            cls,
+            agent: AbstractAgent[CallerDepsT, HandoffOutputDataT],
+    ) -> Handoff[CallerDepsT, HandoffInputModelT, CallerDepsT, HandoffOutputDataT]:
+        """Create a Handoff from an Agent with the same dependencies as the caller."""
+        if not agent.name:
+            raise ValueError('Provide an Agent with a name')
+
+        return Handoff(
+            agent=agent,
+            name=agent.name,
+        )
+
+    def as_handoff_toolset_tool(
+        self,
+        toolset: HandoffToolset[CallerDepsT],
+    ) -> HandoffToolsetTool[CallerDepsT, HandoffInputModelT, HandoffDepsT, HandoffOutputDataT]:
+        """Convert this Handoff into an HandoffToolsetTool by using the toolset's add_agent method."""
+        if not (tool_name := self.name or self.agent.name):
+            raise ValueError('Provide either `name` or an Agent with a name')
+
+        agent_tool_def: ToolDefinition
+
+        type_adapter = TypeAdapter(self.input_type)
+
+        input_type_schema = type_adapter.json_schema(schema_generator=GenerateToolJsonSchema)
+        input_type_schema['properties']['input'] = input_type_schema
+
+        agent_tool_def = ToolDefinition(
+            name=tool_name,
+            description=self.description,
+            parameters_json_schema=input_type_schema,
+        )
+
+        agent_toolset_tool: HandoffToolsetTool[AgentDepsT, Any, Any, Any] = HandoffToolsetTool(
+            toolset=toolset,
+            max_retries=toolset.max_retries,
+            tool_def=agent_tool_def,
+            args_validator=SchemaValidator(schema=core_schema.any_schema()),
+            agent=self.agent,
+            input_type=self.input_type,
+            deps_func=self.deps_func,
+            user_prompt_func=self.user_prompt_func,
+            run_func=self.run_func,
+        )
+
+        return agent_toolset_tool
+
+
+class HandoffToolset(AbstractToolset[AgentDepsT]):
     """A toolset that lets Agents be used as tools.
 
     See [toolset docs](../toolsets.md#agent-toolset) for more information.
@@ -122,13 +182,13 @@ class AgentToolset(AbstractToolset[AgentDepsT]):
 
     max_retries: int
 
-    agent_tools: dict[str, AgentToolsetTool[AgentDepsT, Any, Any, Any]]
+    agent_tools: dict[str, HandoffToolsetTool[AgentDepsT, Any, Any, Any]]
 
     _id: str | None
 
     def __init__(
         self,
-        agent_tools: Sequence[AgentToolsetTool[AgentDepsT, Any, Any, Any]] | None = None,
+        agent_tools: Sequence[HandoffToolsetTool[AgentDepsT, Any, Any, Any]] | None = None,
         max_retries: int = 1,
         *,
         id: str | None = None,
@@ -153,110 +213,20 @@ class AgentToolset(AbstractToolset[AgentDepsT]):
 
     def add_agent_tool(
         self,
-        agent_tool: AgentToolsetTool[AgentDepsT, Any, Any, Any],
+        agent_tool: HandoffToolsetTool[AgentDepsT, Any, Any, Any],
     ) -> None:
         """Add an Agent as a tool to the toolset."""
         self.agent_tools[agent_tool.tool_def.name] = agent_tool
 
-    @overload
-    def add_agent(
+    def add_handoff(
         self,
-        agent: AbstractAgent[AgentDepsT, HandoffOutputDataT],
-        input_type: type[HandoffInputModelT] = str,
-        *,
-        user_prompt_func: HandoffUserPromptFunc[AgentDepsT, HandoffInputModelT] | None = None,
-        run_func: HandoffRunFunc[AgentDepsT, AgentDepsT, HandoffOutputDataT] | None = None,
-        name: str | None = None,
-        description: str | None = None,
-    ) -> None: ...
-
-    """Add an Agent with the same dependencies as the Toolset."""
-
-    @overload
-    def add_agent(
-        self,
-        agent: AbstractAgent[AgentDepsT, HandoffOutputDataT],
-        input_type: type[HandoffInputModelT],
-        *,
-        user_prompt_func: HandoffUserPromptFunc[AgentDepsT, HandoffInputModelT] | None = None,
-        run_func: HandoffRunFunc[AgentDepsT, AgentDepsT, HandoffOutputDataT] | None = None,
-        name: str | None = None,
-        description: str | None = None,
-    ) -> None: ...
-
-    """Add an Agent with the same dependencies as the Toolset and an input type."""
-
-    @overload
-    def add_agent(
-        self,
-        agent: AbstractAgent[HandoffDepsT, HandoffOutputDataT],
-        input_type: type[HandoffInputModelT] = str,
-        *,
-        deps_func: HandoffDepsFunc[AgentDepsT, HandoffInputModelT, HandoffDepsT],
-        user_prompt_func: HandoffUserPromptFunc[AgentDepsT, HandoffInputModelT] | None = None,
-        run_func: HandoffRunFunc[AgentDepsT, HandoffDepsT, HandoffOutputDataT] | None = None,
-        name: str | None = None,
-        description: str | None = None,
-    ) -> None: ...
-
-    """Add an Agent with different dependencies from the Toolset."""
-
-    @overload
-    def add_agent(
-        self,
-        agent: AbstractAgent[HandoffDepsT, HandoffOutputDataT],
-        input_type: type[HandoffInputModelT],
-        *,
-        deps_func: HandoffDepsFunc[AgentDepsT, HandoffInputModelT, HandoffDepsT],
-        user_prompt_func: HandoffUserPromptFunc[AgentDepsT, HandoffInputModelT] | None = None,
-        run_func: HandoffRunFunc[AgentDepsT, AgentDepsT, HandoffOutputDataT] | None = None,
-        name: str | None = None,
-        description: str | None = None,
-    ) -> None: ...
-
-    """Add an Agent with different dependencies from the Toolset and a custom input type."""
-
-    def add_agent(
-        self,
-        agent: AbstractAgent[HandoffDepsT, HandoffOutputDataT],
-        input_type: type[HandoffInputModelT] = str,
-        *,
-        deps_func: HandoffDepsFunc[AgentDepsT, HandoffInputModelT, HandoffDepsT] | None = None,
-        user_prompt_func: HandoffUserPromptFunc[AgentDepsT, HandoffInputModelT] | None = None,
-        run_func: HandoffRunFunc[AgentDepsT, HandoffDepsT, HandoffOutputDataT] | None = None,
-        name: str | None = None,
-        description: str | None = None,
+        handoff: Handoff[AgentDepsT, HandoffInputModelT, HandoffDepsT, HandoffOutputDataT] | AbstractAgent[AgentDepsT, HandoffOutputDataT],
     ) -> None:
-        """Add an Agent as a tool to the toolset."""
-        if not (tool_name := name or agent.name):
-            raise ValueError('Provide either `name` or an Agent with a name')
-
-        agent_tool_def: ToolDefinition
-
-        type_adapter = TypeAdapter(input_type)
-
-        input_type_schema = type_adapter.json_schema(schema_generator=GenerateToolJsonSchema)
-        input_type_schema['properties']['input'] = input_type_schema
-
-        agent_tool_def = ToolDefinition(
-            name=tool_name,
-            description=description,
-            parameters_json_schema=input_type_schema,
-        )
-
-        agent_toolset_tool: AgentToolsetTool[AgentDepsT, Any, Any, Any] = AgentToolsetTool(
-            toolset=self,
-            max_retries=self.max_retries,
-            tool_def=agent_tool_def,
-            args_validator=SchemaValidator(schema=core_schema.any_schema()),
-            agent=agent,
-            input_type=input_type,
-            deps_func=deps_func,
-            user_prompt_func=user_prompt_func,
-            run_func=run_func,
-        )
-
-        self.agent_tools[tool_name] = agent_toolset_tool
+        """Add a Handoff as a tool to the toolset."""
+        if isinstance(handoff, AbstractAgent):
+            handoff = Handoff.from_agent(handoff)
+        handoff_tool = handoff.as_handoff_toolset_tool(self)
+        self.agent_tools[handoff_tool.tool_def.name] = handoff_tool
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
         return {name: tool.as_toolset_tool() for name, tool in self.agent_tools.items()}
