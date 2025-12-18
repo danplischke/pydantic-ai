@@ -50,7 +50,6 @@ else:
 if TYPE_CHECKING:
     from pydantic_graph.beta.mermaid import StateDiagramDirection
 
-
 StateT = TypeVar('StateT', infer_variance=True)
 """Type variable for graph state."""
 
@@ -194,6 +193,7 @@ class Graph(Generic[StateT, DepsT, InputT, OutputT]):
         state: StateT = None,
         deps: DepsT = None,
         inputs: InputT = None,
+        start_node_id: NodeID | None = None,
         span: AbstractContextManager[AbstractSpan] | None = None,
         infer_name: bool = True,
     ) -> OutputT:
@@ -206,6 +206,7 @@ class Graph(Generic[StateT, DepsT, InputT, OutputT]):
             state: The graph state instance
             deps: The dependencies instance
             inputs: The input data for the graph
+            start_node_id: Optional start node ID (defaults to StartNode)
             span: Optional span for tracing/instrumentation
             infer_name: Whether to infer the graph name from the calling frame.
 
@@ -217,7 +218,9 @@ class Graph(Generic[StateT, DepsT, InputT, OutputT]):
             if inferred_name is not None:  # pragma: no branch
                 self.name = inferred_name
 
-        async with self.iter(state=state, deps=deps, inputs=inputs, span=span, infer_name=False) as graph_run:
+        async with self.iter(
+            state=state, deps=deps, inputs=inputs, start_node_id=start_node_id, span=span, infer_name=False
+        ) as graph_run:
             # Note: This would probably be better using `async for _ in graph_run`, but this tests the `next` method,
             # which I'm less confident will be implemented correctly if not used on the critical path. We can change it
             # once we have tests, etc.
@@ -236,6 +239,7 @@ class Graph(Generic[StateT, DepsT, InputT, OutputT]):
         state: StateT = None,
         deps: DepsT = None,
         inputs: InputT = None,
+        start_node_id: NodeID | None = None,
         span: AbstractContextManager[AbstractSpan] | None = None,
         infer_name: bool = True,
     ) -> AsyncIterator[GraphRun[StateT, DepsT, OutputT]]:
@@ -248,6 +252,7 @@ class Graph(Generic[StateT, DepsT, InputT, OutputT]):
             state: The graph state instance
             deps: The dependencies instance
             inputs: The input data for the graph
+            start_node_id: Optional start node ID (defaults to StartNode)
             span: Optional span for tracing/instrumentation
             infer_name: Whether to infer the graph name from the calling frame.
 
@@ -272,6 +277,7 @@ class Graph(Generic[StateT, DepsT, InputT, OutputT]):
                 state=state,
                 deps=deps,
                 inputs=inputs,
+                start_node_id=start_node_id,
                 traceparent=traceparent,
             ) as graph_run:
                 yield graph_run
@@ -364,6 +370,7 @@ class GraphRun(Generic[StateT, DepsT, OutputT]):
         state: StateT,
         deps: DepsT,
         inputs: InputT,
+        start_node_id: NodeID | None = None,
         traceparent: str | None,
     ):
         """Initialize a graph run.
@@ -373,6 +380,7 @@ class GraphRun(Generic[StateT, DepsT, OutputT]):
             state: The graph state instance
             deps: The dependencies instance
             inputs: The input data for the graph
+            start_node_id: Optional start node ID (defaults to StartNode)
             traceparent: Optional trace parent for instrumentation
         """
         self.graph = graph
@@ -395,9 +403,16 @@ class GraphRun(Generic[StateT, DepsT, OutputT]):
 
         self._next_task_id = 0
         self._next_node_run_id = 0
-        initial_fork_stack: ForkStack = (ForkStackItem(StartNode.id, self._get_next_node_run_id(), 0),)
+
+        initial_node_id = start_node_id if start_node_id is not None else StartNode.id
+
+        # Validate that the node exists in the graph
+        if initial_node_id not in graph.nodes:
+            raise ValueError(f'Node {initial_node_id} not found in graph')
+
+        initial_fork_stack: ForkStack = (ForkStackItem(initial_node_id, self._get_next_node_run_id(), 0),)
         self._first_task = GraphTask(
-            node_id=StartNode.id, inputs=inputs, fork_stack=initial_fork_stack, task_id=self._get_next_task_id()
+            node_id=initial_node_id, inputs=inputs, fork_stack=initial_fork_stack, task_id=self._get_next_task_id()
         )
         self._iterator_task_group = create_task_group()
         self._iterator_instance = _GraphIterator[StateT, DepsT, OutputT](
@@ -433,8 +448,10 @@ class GraphRun(Generic[StateT, DepsT, OutputT]):
 
     @overload
     def _traceparent(self, *, required: Literal[False]) -> str | None: ...
+
     @overload
     def _traceparent(self) -> str: ...
+
     def _traceparent(self, *, required: bool = True) -> str | None:
         """Get the trace parent for instrumentation.
 
